@@ -2,12 +2,11 @@ name: Bot MyMuze Diário às 05:00
 
 on:
   schedule:
-    # Executa todos os dias às 03:00 UTC (que corresponde a 05:00 da manhã em Moçambique)
-    - cron: '0 3 * * *'
-  workflow_dispatch: # Permite clicar no botão "Run workflow" manualmente para testar a qualquer momento
+    - cron: '0 3 * * *' # 03:00 UTC = 05:00 em Moçambique
+  workflow_dispatch:
 
 jobs:
-  run-mymuze-bot:
+  rodar:
     runs-on: ubuntu-latest
     steps:
       - name: Aceder ao Código do Repositório
@@ -16,12 +15,26 @@ jobs:
       - name: Configurar o Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.10'
+          python-version: '3.12'
 
-      - name: Instalar Dependências e Playwright
+      - name: Instalar Playwright
         run: |
           pip install playwright
-          playwright install chromium
+          playwright install --with-deps chromium
 
-      - name: Executar o Bot
+      - name: Recriar Sessões a partir dos Secrets
+        run: |
+          echo "${{ secrets.SESSAO_1_B64 }}" | base64 -d > sessao_1.json || true
+          echo "${{ secrets.SESSAO_2_B64 }}" | base64 -d > sessao_2.json || true
+
+      - name: Rodar Bot
         run: python bot.py
+
+      - name: Guardar capturas de ecrã
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: capturas-ecra
+          path: captura_*.png
+          if-no-files-found: ignore
+          
