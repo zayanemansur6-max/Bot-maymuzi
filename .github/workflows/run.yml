@@ -3,7 +3,7 @@ name: Bot MyMuze Diário
 on:
   workflow_dispatch:
   schedule:
-    - cron: "0 3 * * *"   # 03:00 UTC = 05:00 em Moçambique
+    - cron: "0 3 * * *"
 
 jobs:
   rodar:
@@ -19,7 +19,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: sessoes
-          key: sessoes-${{ github.run_id }}
+          key: sessoes-${{ github.run_id }}-${{ github.run_attempt }}
           restore-keys: sessoes-
 
       - name: Instalar Playwright
