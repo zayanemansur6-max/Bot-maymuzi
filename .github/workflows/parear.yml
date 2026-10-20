@@ -23,7 +23,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: sessoes
-          key: sessoes-${{ github.run_id }}
+          key: sessoes-${{ github.run_id }}-${{ github.run_attempt }}
           restore-keys: sessoes-
 
       - name: Instalar Playwright
