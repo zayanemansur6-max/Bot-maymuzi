@@ -4,8 +4,9 @@ import time
 from playwright.sync_api import sync_playwright
 
 URL_ALVO = "https://mymuze.vm.co.mz/index.html#/home"
-TOTAL_CONTAS = 2  # Apenas 2 contas
+TOTAL_CONTAS = 2
 TEMPO_OUVINDO = 30  # segundos
+PASTA = "sessoes"
 
 USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -23,6 +24,7 @@ SELETOR_PLAY = (
     '[aria-label*="Play"], [aria-label*="Tocar"]'
 )
 
+
 def fechar_popups_e_avisos(page):
     for texto in TEXTOS_BOTOES:
         try:
@@ -34,31 +36,52 @@ def fechar_popups_e_avisos(page):
         except Exception:
             pass
 
+
+def na_tela_de_login(page):
+    try:
+        t = page.inner_text("body").lower()
+    except Exception:
+        return False
+    return "introduz o código" in t or "novo dispositivo" in t
+
+
 def musica_tocando(page):
     return page.evaluate(
         """() => [...document.querySelectorAll('audio, video')]
             .some(m => !m.paused && m.currentTime > 0)"""
     )
 
+
 def rodar_conta(p, n):
-    arquivo = f"sessao_{n}.json"
+    arquivo = f"{PASTA}/sessao_{n}.json"
     if not os.path.exists(arquivo):
-        print(f"[Conta {n}] {arquivo} não encontrado, a saltar.")
+        print(f"[Conta {n}] {arquivo} não existe. Rode 'Parear conta' primeiro.")
         return False
 
     browser = p.chromium.launch(
         headless=True,
         args=["--no-sandbox", "--disable-setuid-sandbox",
-              "--disable-notifications", "--autoplay-policy=no-user-gesture-required"],
+              "--disable-notifications",
+              "--autoplay-policy=no-user-gesture-required"],
     )
-    context = browser.new_context(storage_state=arquivo, user_agent=USER_AGENT)
+    context = browser.new_context(
+        storage_state=arquivo, user_agent=USER_AGENT,
+        viewport={"width": 1280, "height": 720},
+    )
     page = context.new_page()
     page.on("dialog", lambda d: d.accept())
 
     try:
         print(f"\n===== Conta {n} de {TOTAL_CONTAS} =====")
         page.goto(URL_ALVO, wait_until="domcontentloaded", timeout=60000)
-        time.sleep(5)
+        time.sleep(6)
+
+        if na_tela_de_login(page):
+            page.screenshot(path=f"captura_{n}.png")
+            print(f"[Conta {n}] ERRO: caiu na tela de login. "
+                  "A sessão expirou, rode 'Parear conta' de novo.")
+            return False
+
         fechar_popups_e_avisos(page)
         fechar_popups_e_avisos(page)
 
@@ -76,7 +99,8 @@ def rodar_conta(p, n):
         page.screenshot(path=f"captura_{n}.png")
 
         if not tocando:
-            print(f"[Conta {n}] ERRO: a música não começou. Veja captura_{n}.png")
+            print(f"[Conta {n}] ERRO: a música não começou. "
+                  f"Veja captura_{n}.png")
             return False
 
         print(f"[Conta {n}] A tocar! A aguardar {TEMPO_OUVINDO}s...")
@@ -95,12 +119,14 @@ def rodar_conta(p, n):
         browser.close()
         time.sleep(2)
 
+
 def main():
     with sync_playwright() as p:
         resultados = {n: rodar_conta(p, n) for n in range(1, TOTAL_CONTAS + 1)}
     print("\nResumo:", {f"conta_{n}": ("ok" if r else "falhou")
                         for n, r in resultados.items()})
     return all(resultados.values())
+
 
 if __name__ == "__main__":
     sys.exit(0 if main() else 1)
