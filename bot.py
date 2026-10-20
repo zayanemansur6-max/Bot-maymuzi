@@ -32,19 +32,24 @@ SCRIPT_VIGIA = """
 })();
 """
 
-JS_CARTAO = """e => {
+# Acha o cartão da estação em volta do botão e devolve pontos clicáveis
+JS_ALVOS = """e => {
   let c = e;
   while (c.parentElement && (c.getBoundingClientRect().width < 120
          || c.getBoundingClientRect().height < 120)) c = c.parentElement;
-  const r = c.getBoundingClientRect();
-  return {x: r.x + r.width / 2, y: r.y + r.height / 2,
-          w: Math.round(r.width), h: Math.round(r.height),
-          cls: (c.className + '').slice(0, 40)};
-}"""
-
-JS_TOPO = """([x, y]) => {
-  const t = document.elementFromPoint(x, y);
-  return t ? t.tagName + '.' + (t.className + '').slice(0, 40) : null;
+  const centro = x => {
+    const r = x.getBoundingClientRect();
+    return [r.x + r.width / 2, r.y + r.height / 2];
+  };
+  const pontos = [];
+  const icone = c.querySelector('[class*="player-icon" i]');
+  if (icone) pontos.push(['icone', ...centro(icone)]);
+  const img = c.querySelector('img');
+  if (img) pontos.push(['imagem', ...centro(img)]);
+  pontos.push(['cartao', ...centro(c)]);
+  const nome = c.querySelector('[class*="text-name" i]');
+  if (nome) pontos.push(['nome', ...centro(nome)]);
+  return {pontos: pontos, html: c.outerHTML.slice(0, 700)};
 }"""
 
 JS_MODAIS = """() => [...document.querySelectorAll(
@@ -133,76 +138,80 @@ def ligar_vigias(page, eventos):
             pass
 
     def cons(m):
-        if m.type == "error":
+        if m.type == "error" and "Content Security Policy" not in m.text:
             eventos.append("console: " + m.text[:110])
 
     page.on("response", resp)
     page.on("console", cons)
 
 
+def tentar_detalhe(page, n):
+    """Se abriu a página da estação, clica no play visível dela."""
+    opcoes = (
+        page.locator("a.play-actions-play").filter(visible=True),
+        page.get_by_text(re.compile(r"^\s*Reproduzir\s*$", re.I)).filter(
+            visible=True),
+    )
+    for loc in opcoes:
+        try:
+            if loc.count() > 0:
+                loc.first.click(timeout=3000)
+                time.sleep(4)
+                fechar_popups_e_avisos(page)
+                if esta_tocando(page):
+                    return True
+        except Exception:
+            pass
+    return False
+
+
 def clicar_play(page, n):
     alvo = page.locator(SELETOR_PLAY)
     total = alvo.count()
     print(f"[Conta {n}] Botões de play encontrados: {total}")
+    url_lista = page.url
 
-    for idx in range(min(total, 6)):
+    for idx in range(min(total, 3)):
         el = alvo.nth(idx)
         try:
-            el.scroll_into_view_if_needed(timeout=3000)
-        except Exception:
-            pass
-
-        card = None
-        try:
-            card = el.evaluate(JS_CARTAO)
-            page.mouse.move(card["x"], card["y"])
-            time.sleep(0.8)
-        except Exception:
-            pass
-
-        try:
-            visivel = el.is_visible()
-        except Exception:
-            visivel = False
-        box = None
-        try:
-            box = el.bounding_box()
-        except Exception:
-            pass
-        topo = None
-        if box:
-            cx = box["x"] + box["width"] / 2
-            cy = box["y"] + box["height"] / 2
-            try:
-                topo = page.evaluate(JS_TOPO, [cx, cy])
-            except Exception:
-                pass
-        print(f"[Conta {n}] Play #{idx + 1}: visível={visivel} "
-              f"cartão={card and (card['w'], card['h'])} "
-              f"caixa={box and (round(box['x']), round(box['y']))} "
-              f"topo={topo}")
-
-        metodo = None
-        try:
-            el.click(timeout=3000)
-            metodo = "normal"
-        except Exception:
-            if box:
-                page.mouse.click(cx, cy)
-                metodo = "mouse"
-        if not metodo:
+            el.evaluate(
+                "e => e.scrollIntoView({block:'center', inline:'center'})")
+            time.sleep(1)
+            info = el.evaluate(JS_ALVOS)
+        except Exception as e:
+            print(f"[Conta {n}] Cartão #{idx + 1}: erro {str(e)[:60]}")
             continue
 
-        time.sleep(4)
-        modais = modais_visiveis(page)
-        if modais:
-            print(f"[Conta {n}]   pop-ups após o clique: {modais}")
-        fechar_popups_e_avisos(page)
+        if idx == 0:
+            print(f"[Conta {n}] HTML do cartão: {info['html']}")
 
-        if esta_tocando(page):
-            print(f"[Conta {n}] Play #{idx + 1} funcionou ({metodo}).")
-            return True
-        print(f"[Conta {n}]   clicado ({metodo}), mas sem som.")
+        for nome, x, y in info["pontos"]:
+            try:
+                page.mouse.move(x, y)
+                time.sleep(0.5)
+                page.mouse.click(x, y)
+            except Exception:
+                continue
+            time.sleep(4)
+
+            modais = modais_visiveis(page)
+            if modais:
+                print(f"[Conta {n}]   pop-ups após o clique: {modais}")
+            fechar_popups_e_avisos(page)
+
+            if esta_tocando(page):
+                print(f"[Conta {n}] Cartão #{idx + 1} tocou (clique: {nome}).")
+                return True
+
+            if page.url != url_lista:
+                print(f"[Conta {n}]   clique em '{nome}' abriu: {page.url}")
+                if tentar_detalhe(page, n):
+                    print(f"[Conta {n}] Tocou pela página da estação.")
+                    return True
+                page.go_back()
+                time.sleep(3)
+                break  # posições mudaram, vai para o próximo cartão
+            print(f"[Conta {n}]   clique em '{nome}': sem som.")
     return False
 
 
