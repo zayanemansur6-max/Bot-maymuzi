@@ -19,15 +19,29 @@ TEXTOS_BOTOES = [
     "Aceitar", "Concordar", "Entendi", "Fechar", "OK", "Skip", "Ignorar",
 ]
 
-SELETOR_PLAY = (
-    '.play-button, .btn-play, .play-btn, [class*="play" i], '
-    '[id*="play" i], [title*="play" i], [title*="tocar" i], '
-    '[aria-label*="play" i], [aria-label*="tocar" i]'
-)
+SELETORES_PLAY = [
+    "a.play-actions-play",
+    ".play-button", ".btn-play", ".play-btn",
+    '[aria-label*="play" i]', '[aria-label*="tocar" i]',
+]
+
+# Guarda qualquer áudio/vídeo que o site tente tocar (mesmo fora da página)
+SCRIPT_VIGIA = """
+(() => {
+  window.__medias = [];
+  const orig = HTMLMediaElement.prototype.play;
+  HTMLMediaElement.prototype.play = function (...a) {
+    window.__medias.push(this);
+    return orig.apply(this, a);
+  };
+})();
+"""
+
+JS_MIDIAS = """() => [...(window.__medias || []),
+    ...document.querySelectorAll('audio, video')]"""
 
 
 def clicar_texto_exato(page, texto, espera=2):
-    """Clica num elemento visível cujo texto é exatamente 'texto'."""
     try:
         padrao = re.compile(rf"^\s*{texto}\s*$", re.I)
         alvo = page.get_by_text(padrao).filter(visible=True)
@@ -47,12 +61,33 @@ def fechar_popups_e_avisos(page):
 
 
 def ir_para_estacoes(page, n):
-    # 1) Pop-up de plano: escolher a opção gratuita
     if clicar_texto_exato(page, r"Continuar nas esta[cç][õo]es", espera=3):
         print(f"[Conta {n}] Pop-up: 'Continuar nas estações' clicado.")
-    # 2) Aba Estações
     if clicar_texto_exato(page, r"Esta[cç][õo]es", espera=3):
         print(f"[Conta {n}] Aba 'Estações' aberta.")
+
+
+def clicar_play(page, n):
+    for seletor in SELETORES_PLAY:
+        try:
+            alvo = page.locator(seletor).filter(visible=True)
+            if alvo.count() == 0:
+                continue
+            el = alvo.first
+            try:
+                el.scroll_into_view_if_needed(timeout=3000)
+                el.hover(timeout=3000)
+            except Exception:
+                pass
+            try:
+                el.click(timeout=5000)
+            except Exception:
+                el.click(timeout=3000, force=True)
+            print(f"[Conta {n}] Play clicado com: {seletor}")
+            return True
+        except Exception:
+            continue
+    return False
 
 
 def na_tela_de_login(page):
@@ -65,7 +100,11 @@ def na_tela_de_login(page):
 
 def musica_tocando(page):
     return page.evaluate(
-        """() => [...document.querySelectorAll('audio, video')]
+        f"""() => ({JS_MIDIAS[6:]})()
+            .some(m => !m.paused && m.currentTime > 0)"""
+        if False else
+        """() => [...(window.__medias || []),
+            ...document.querySelectorAll('audio, video')]
             .some(m => !m.paused && m.currentTime > 0)"""
     )
 
@@ -75,28 +114,30 @@ def diagnostico(page, n):
     try:
         print("URL:", page.url)
         texto = page.inner_text("body").replace("\n", " | ")
-        print("TEXTO:", texto[:600])
+        print("TEXTO:", texto[:400])
         midias = page.evaluate(
-            """() => [...document.querySelectorAll('audio,video')].map(m => ({
+            """() => [...(window.__medias || []),
+                ...document.querySelectorAll('audio, video')].map(m => ({
                 tag: m.tagName, paused: m.paused, t: m.currentTime,
-                src: (m.currentSrc || '').slice(0, 60)}))"""
+                ready: m.readyState, erro: m.error ? m.error.code : null,
+                src: (m.currentSrc || '').slice(0, 80)}))"""
         )
-        print("MIDIAS:", midias)
-        itens = page.evaluate(
-            """() => [...document.querySelectorAll(
-                'button, a, [role=button], [onclick]')]
-                .filter(e => e.offsetParent !== null)
-                .slice(0, 40)
-                .map(e => [e.tagName.toLowerCase(),
-                    (e.className || '').toString().slice(0, 40),
-                    e.getAttribute('aria-label') || '',
-                    (e.innerText || '').trim().slice(0, 25)].join(' ~ '))"""
-        )
-        print("BOTÕES VISÍVEIS (tag ~ classe ~ aria-label ~ texto):")
-        for i in itens:
-            print("  ", i)
+        print("MIDIAS (erro 4 = formato não suportado):", midias)
     except Exception as e:
         print("diagnóstico falhou:", e)
+
+
+def abrir_navegador(p):
+    args = ["--no-sandbox", "--disable-setuid-sandbox",
+            "--disable-notifications",
+            "--autoplay-policy=no-user-gesture-required"]
+    try:
+        b = p.chromium.launch(channel="chrome", headless=True, args=args)
+        print("Navegador: Google Chrome")
+        return b
+    except Exception:
+        print("Navegador: Chromium do Playwright")
+        return p.chromium.launch(headless=True, args=args)
 
 
 def rodar_conta(p, n):
@@ -105,16 +146,12 @@ def rodar_conta(p, n):
         print(f"[Conta {n}] {arquivo} não existe. Rode 'Parear conta' primeiro.")
         return False
 
-    browser = p.chromium.launch(
-        headless=True,
-        args=["--no-sandbox", "--disable-setuid-sandbox",
-              "--disable-notifications",
-              "--autoplay-policy=no-user-gesture-required"],
-    )
+    browser = abrir_navegador(p)
     context = browser.new_context(
         storage_state=arquivo, user_agent=USER_AGENT,
         viewport={"width": 1280, "height": 720},
     )
+    context.add_init_script(SCRIPT_VIGIA)
     page = context.new_page()
     page.on("dialog", lambda d: d.accept())
 
@@ -133,15 +170,11 @@ def rodar_conta(p, n):
         ir_para_estacoes(page, n)
         fechar_popups_e_avisos(page)
 
-        try:
-            page.locator(SELETOR_PLAY).filter(visible=True).first.click(
-                timeout=8000)
-            print(f"[Conta {n}] Botão de play clicado.")
-        except Exception:
+        if not clicar_play(page, n):
             print(f"[Conta {n}] Botão não achado, a tentar a tecla Espaço...")
             page.keyboard.press("Space")
 
-        time.sleep(4)
+        time.sleep(6)
         fechar_popups_e_avisos(page)
 
         tocando = musica_tocando(page)
