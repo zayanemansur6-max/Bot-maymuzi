@@ -19,13 +19,9 @@ TEXTOS_BOTOES = [
     "Aceitar", "Concordar", "Entendi", "Fechar", "OK", "Skip", "Ignorar",
 ]
 
-SELETORES_PLAY = [
-    "a.play-actions-play",
-    ".play-button", ".btn-play", ".play-btn",
-    '[aria-label*="play" i]', '[aria-label*="tocar" i]',
-]
+SELETOR_PLAY = "a.play-actions-play"
 
-# Guarda qualquer áudio/vídeo que o site tente tocar (mesmo fora da página)
+# Guarda qualquer áudio/vídeo que o site tente tocar
 SCRIPT_VIGIA = """
 (() => {
   window.__medias = [];
@@ -36,9 +32,6 @@ SCRIPT_VIGIA = """
   };
 })();
 """
-
-JS_MIDIAS = """() => [...(window.__medias || []),
-    ...document.querySelectorAll('audio, video')]"""
 
 
 def clicar_texto_exato(page, texto, espera=2):
@@ -67,29 +60,6 @@ def ir_para_estacoes(page, n):
         print(f"[Conta {n}] Aba 'Estações' aberta.")
 
 
-def clicar_play(page, n):
-    for seletor in SELETORES_PLAY:
-        try:
-            alvo = page.locator(seletor).filter(visible=True)
-            if alvo.count() == 0:
-                continue
-            el = alvo.first
-            try:
-                el.scroll_into_view_if_needed(timeout=3000)
-                el.hover(timeout=3000)
-            except Exception:
-                pass
-            try:
-                el.click(timeout=5000)
-            except Exception:
-                el.click(timeout=3000, force=True)
-            print(f"[Conta {n}] Play clicado com: {seletor}")
-            return True
-        except Exception:
-            continue
-    return False
-
-
 def na_tela_de_login(page):
     try:
         t = page.inner_text("body").lower()
@@ -99,22 +69,73 @@ def na_tela_de_login(page):
 
 
 def musica_tocando(page):
-    return page.evaluate(
-        f"""() => ({JS_MIDIAS[6:]})()
-            .some(m => !m.paused && m.currentTime > 0)"""
-        if False else
-        """() => [...(window.__medias || []),
-            ...document.querySelectorAll('audio, video')]
-            .some(m => !m.paused && m.currentTime > 0)"""
-    )
+    try:
+        return page.evaluate(
+            """() => [...(window.__medias || []),
+                ...document.querySelectorAll('audio, video')]
+                .some(m => !m.paused && m.currentTime > 0)"""
+        )
+    except Exception:
+        return False
+
+
+def pause_visivel(page):
+    try:
+        return page.locator('[class*="pause" i]').filter(
+            visible=True).count() > 0
+    except Exception:
+        return False
+
+
+def esta_tocando(page):
+    return musica_tocando(page) or pause_visivel(page)
+
+
+def clicar_play(page, n):
+    alvo = page.locator(SELETOR_PLAY)
+    total = alvo.count()
+    print(f"[Conta {n}] Botões de play encontrados: {total}")
+    if total == 0:
+        return False
+
+    for idx in range(min(total, 3)):
+        el = alvo.nth(idx)
+        try:
+            el.scroll_into_view_if_needed(timeout=3000)
+        except Exception:
+            pass
+        try:
+            # passa o mouse no cartão (o botão pode só aparecer assim)
+            el.locator("xpath=../..").hover(timeout=3000)
+        except Exception:
+            pass
+
+        for metodo in ("normal", "forçado", "direto"):
+            try:
+                if metodo == "normal":
+                    el.click(timeout=3000)
+                elif metodo == "forçado":
+                    el.click(timeout=3000, force=True)
+                else:
+                    el.evaluate("e => e.click()")
+            except Exception as e:
+                print(f"[Conta {n}] Play #{idx + 1} ({metodo}) falhou: "
+                      f"{str(e)[:60]}")
+                continue
+            time.sleep(4)
+            fechar_popups_e_avisos(page)
+            if esta_tocando(page):
+                print(f"[Conta {n}] Play #{idx + 1} funcionou ({metodo}).")
+                return True
+            print(f"[Conta {n}] Play #{idx + 1} ({metodo}) clicado, "
+                  "mas sem som ainda.")
+    return False
 
 
 def diagnostico(page, n):
     print(f"[Conta {n}] --- DIAGNÓSTICO ---")
     try:
         print("URL:", page.url)
-        texto = page.inner_text("body").replace("\n", " | ")
-        print("TEXTO:", texto[:400])
         midias = page.evaluate(
             """() => [...(window.__medias || []),
                 ...document.querySelectorAll('audio, video')].map(m => ({
@@ -123,6 +144,27 @@ def diagnostico(page, n):
                 src: (m.currentSrc || '').slice(0, 80)}))"""
         )
         print("MIDIAS (erro 4 = formato não suportado):", midias)
+        info = page.evaluate(
+            """() => {
+                const q = s => [...document.querySelectorAll(s)];
+                const caixa = e => {
+                    const r = e.getBoundingClientRect();
+                    return Math.round(r.width) + 'x' + Math.round(r.height);
+                };
+                const p = q('a.play-actions-play')[0];
+                return {
+                  play_total: q('a.play-actions-play').length,
+                  play_primeiro_tamanho: p ? caixa(p) : null,
+                  play_primeiro_html: p ? p.outerHTML.slice(0, 200) : null,
+                  com_pause: q('[class*=pause i]').map(
+                      e => (e.className + '').slice(0, 40)).slice(0, 8),
+                  com_player: q('[class*=player i]').map(
+                      e => (e.className + '').slice(0, 40)).slice(0, 8),
+                };
+            }"""
+        )
+        for k, v in info.items():
+            print(f"  {k}: {v}")
     except Exception as e:
         print("diagnóstico falhou:", e)
 
@@ -169,15 +211,9 @@ def rodar_conta(p, n):
         fechar_popups_e_avisos(page)
         ir_para_estacoes(page, n)
         fechar_popups_e_avisos(page)
+        time.sleep(2)
 
-        if not clicar_play(page, n):
-            print(f"[Conta {n}] Botão não achado, a tentar a tecla Espaço...")
-            page.keyboard.press("Space")
-
-        time.sleep(6)
-        fechar_popups_e_avisos(page)
-
-        tocando = musica_tocando(page)
+        tocando = clicar_play(page, n)
         page.screenshot(path=f"captura_{n}.png")
 
         if not tocando:
