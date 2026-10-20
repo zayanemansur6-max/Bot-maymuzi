@@ -1,0 +1,45 @@
+name: Parear conta MyMuze
+
+on:
+  workflow_dispatch:
+    inputs:
+      conta:
+        description: "Número da conta (1 ou 2)"
+        required: true
+        default: "1"
+
+jobs:
+  parear:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Restaurar sessões já guardadas
+        uses: actions/cache@v4
+        with:
+          path: sessoes
+          key: sessoes-${{ github.run_id }}
+          restore-keys: sessoes-
+
+      - name: Instalar Playwright
+        run: |
+          pip install playwright
+          playwright install --with-deps chromium
+
+      - name: Parear (o código aparece aqui no log)
+        env:
+          CONTA: ${{ inputs.conta }}
+        run: python -u parear.py "$CONTA"
+
+      - name: Guardar capturas
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: capturas-pareamento
+          path: captura_*.png
+          if-no-files-found: ignore
