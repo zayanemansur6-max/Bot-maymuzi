@@ -19,7 +19,11 @@ TEXTOS_BOTOES = [
     "Aceitar", "Concordar", "Entendi", "Fechar", "OK", "Skip", "Ignorar",
 ]
 
-SELETOR_PLAY = "a.play-actions-play"
+# Elementos das estações de rádio (parte gratuita)
+SELETORES_ESTACAO = [
+    '[class*="tag-station-player-icon-wrap"]',
+    '[class*="tag-station-radio"]',
+]
 
 SCRIPT_VIGIA = """
 (() => {
@@ -32,24 +36,10 @@ SCRIPT_VIGIA = """
 })();
 """
 
-# Acha o cartão da estação em volta do botão e devolve pontos clicáveis
-JS_ALVOS = """e => {
-  let c = e;
-  while (c.parentElement && (c.getBoundingClientRect().width < 120
-         || c.getBoundingClientRect().height < 120)) c = c.parentElement;
-  const centro = x => {
-    const r = x.getBoundingClientRect();
-    return [r.x + r.width / 2, r.y + r.height / 2];
-  };
-  const pontos = [];
-  const icone = c.querySelector('[class*="player-icon" i]');
-  if (icone) pontos.push(['icone', ...centro(icone)]);
-  const img = c.querySelector('img');
-  if (img) pontos.push(['imagem', ...centro(img)]);
-  pontos.push(['cartao', ...centro(c)]);
-  const nome = c.querySelector('[class*="text-name" i]');
-  if (nome) pontos.push(['nome', ...centro(nome)]);
-  return {pontos: pontos, html: c.outerHTML.slice(0, 700)};
+JS_CAIXA = """e => {
+  const r = e.getBoundingClientRect();
+  return {x: r.x + r.width / 2, y: r.y + r.height / 2,
+          w: Math.round(r.width), h: Math.round(r.height)};
 }"""
 
 JS_MODAIS = """() => [...document.querySelectorAll(
@@ -166,52 +156,62 @@ def tentar_detalhe(page, n):
 
 
 def clicar_play(page, n):
-    alvo = page.locator(SELETOR_PLAY)
-    total = alvo.count()
-    print(f"[Conta {n}] Botões de play encontrados: {total}")
     url_lista = page.url
-
-    for idx in range(min(total, 3)):
-        el = alvo.nth(idx)
-        try:
-            el.evaluate(
-                "e => e.scrollIntoView({block:'center', inline:'center'})")
-            time.sleep(1)
-            info = el.evaluate(JS_ALVOS)
-        except Exception as e:
-            print(f"[Conta {n}] Cartão #{idx + 1}: erro {str(e)[:60]}")
+    for seletor in SELETORES_ESTACAO:
+        alvo = page.locator(seletor)
+        total = alvo.count()
+        print(f"[Conta {n}] '{seletor}': {total} encontrados")
+        if total == 0:
             continue
+        try:
+            html = alvo.first.evaluate(
+                "e => (e.parentElement || e).outerHTML.slice(0, 500)")
+            print(f"[Conta {n}] HTML da estação: {html}")
+        except Exception:
+            pass
 
-        if idx == 0:
-            print(f"[Conta {n}] HTML do cartão: {info['html']}")
-
-        for nome, x, y in info["pontos"]:
+        for idx in range(min(total, 4)):
+            el = alvo.nth(idx)
             try:
-                page.mouse.move(x, y)
-                time.sleep(0.5)
-                page.mouse.click(x, y)
-            except Exception:
+                el.evaluate(
+                    "e => e.scrollIntoView({block:'center', inline:'center'})")
+                time.sleep(1)
+                c = el.evaluate(JS_CAIXA)
+            except Exception as e:
+                print(f"[Conta {n}] Estação #{idx + 1}: erro {str(e)[:60]}")
                 continue
-            time.sleep(4)
+            print(f"[Conta {n}] Estação #{idx + 1}: tamanho={c['w']}x{c['h']}")
 
-            modais = modais_visiveis(page)
-            if modais:
-                print(f"[Conta {n}]   pop-ups após o clique: {modais}")
-            fechar_popups_e_avisos(page)
+            for metodo in ("mouse", "direto"):
+                try:
+                    if metodo == "mouse":
+                        page.mouse.move(c["x"], c["y"])
+                        time.sleep(0.5)
+                        page.mouse.click(c["x"], c["y"])
+                    else:
+                        el.evaluate("e => e.click()")
+                except Exception:
+                    continue
+                time.sleep(4)
 
-            if esta_tocando(page):
-                print(f"[Conta {n}] Cartão #{idx + 1} tocou (clique: {nome}).")
-                return True
+                modais = modais_visiveis(page)
+                if modais:
+                    print(f"[Conta {n}]   pop-ups após o clique: {modais}")
+                fechar_popups_e_avisos(page)
 
-            if page.url != url_lista:
-                print(f"[Conta {n}]   clique em '{nome}' abriu: {page.url}")
-                if tentar_detalhe(page, n):
-                    print(f"[Conta {n}] Tocou pela página da estação.")
+                if esta_tocando(page):
+                    print(f"[Conta {n}] Estação #{idx + 1} tocou ({metodo}).")
                     return True
-                page.go_back()
-                time.sleep(3)
-                break  # posições mudaram, vai para o próximo cartão
-            print(f"[Conta {n}]   clique em '{nome}': sem som.")
+
+                if page.url != url_lista:
+                    print(f"[Conta {n}]   o clique abriu: {page.url}")
+                    if tentar_detalhe(page, n):
+                        print(f"[Conta {n}] Tocou pela página da estação.")
+                        return True
+                    page.go_back()
+                    time.sleep(3)
+                    break
+                print(f"[Conta {n}]   clique ({metodo}): sem som.")
     return False
 
 
