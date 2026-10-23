@@ -5,7 +5,7 @@ import time
 from playwright.sync_api import sync_playwright
 
 URL_ALVO = "https://mymuze.vm.co.mz/index.html#/home"
-TOTAL_CONTAS = 2
+TOTAL_CONTAS = 3
 TEMPO_OUVINDO = 30  # segundos
 PASTA = "sessoes"
 
